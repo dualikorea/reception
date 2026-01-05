@@ -8,6 +8,7 @@ import {
   BarChart3, 
   BrainCircuit, 
   Trash2, 
+  Pencil,
   CheckCircle2, 
   Clock, 
   AlertCircle,
@@ -42,13 +43,18 @@ const App: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Form States
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newRequest, setNewRequest] = useState<Partial<RequestItem>>({
+  // Modal & Form States
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<RequestItem | null>(null);
+  const [formData, setFormData] = useState<Partial<RequestItem>>({
     category: Category.REPAIR,
     status: Status.PENDING,
     receiveDate: new Date().toISOString().split('T')[0],
-    qty: 1
+    qty: 1,
+    customer: '',
+    product: '',
+    issue: '',
+    buyDate: ''
   });
 
   // AI Advice States
@@ -59,37 +65,24 @@ const App: React.FC = () => {
   useEffect(() => {
     const saved = localStorage.getItem('smart-ledger-data');
     if (saved) {
-      setRequests(JSON.parse(saved));
-    } else {
-      // Sample data
-      const sample: RequestItem[] = [
-        {
-          id: '1',
-          category: Category.REPAIR,
-          customer: '삼성전자',
-          receiveDate: '2024-05-15',
-          product: 'OLED 패널',
-          qty: 10,
-          issue: '화면 잔상 현상 및 데드픽셀 발생',
-          buyDate: '2023-10-01',
-          status: Status.PENDING
-        },
-        {
-          id: '2',
-          category: Category.DEVELOPMENT,
-          customer: 'LG 이노텍',
-          receiveDate: '2024-05-16',
-          product: '카메라 모듈 v2',
-          qty: 1,
-          issue: '저조도 노이즈 개선 펌웨어 개발 요청',
-          buyDate: '2024-01-10',
-          status: Status.IN_PROGRESS
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setRequests(parsed);
+        } else {
+          setRequests([]);
         }
-      ];
-      setRequests(sample);
+      } catch (e) {
+        console.error("Failed to parse saved data", e);
+        setRequests([]);
+      }
+    } else {
+      // Starting empty as requested - removing sample data
+      setRequests([]);
     }
   }, []);
 
+  // Save to LocalStorage whenever requests change
   useEffect(() => {
     localStorage.setItem('smart-ledger-data', JSON.stringify(requests));
   }, [requests]);
@@ -111,27 +104,51 @@ const App: React.FC = () => {
   ], [stats]);
 
   // Handlers
-  const handleAddRequest = (e: React.FormEvent) => {
-    e.preventDefault();
-    const item: RequestItem = {
-      ...newRequest as RequestItem,
-      id: Date.now().toString(),
-    };
-    setRequests(prev => [item, ...prev]);
-    setShowAddForm(false);
-    setNewRequest({
+  const openAddModal = () => {
+    setEditingItem(null);
+    setFormData({
       category: Category.REPAIR,
       status: Status.PENDING,
       receiveDate: new Date().toISOString().split('T')[0],
-      qty: 1
+      qty: 1,
+      customer: '',
+      product: '',
+      issue: '',
+      buyDate: ''
     });
-    setActiveTab('receive');
+    setIsModalOpen(true);
   };
 
-  const updateRequest = (id: string, updates: Partial<RequestItem>) => {
+  const openEditModal = (item: RequestItem) => {
+    setEditingItem(item);
+    setFormData({ ...item });
+    setIsModalOpen(true);
+  };
+
+  const handleSaveRequest = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingItem) {
+      // Update existing record
+      setRequests(prev => prev.map(r => 
+        r.id === editingItem.id ? { ...r, ...formData } as RequestItem : r
+      ));
+    } else {
+      // Create new record
+      const newItem: RequestItem = {
+        ...formData as RequestItem,
+        id: Date.now().toString(),
+      };
+      setRequests(prev => [newItem, ...prev]);
+      setActiveTab('receive');
+    }
+    setIsModalOpen(false);
+  };
+
+  const updateRequestStatus = (id: string, updates: Partial<RequestItem>) => {
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const updated = { ...r, ...updates };
+        // Automatically set process date if completed
         if (updates.status === Status.COMPLETED && !updated.processDate) {
           updated.processDate = new Date().toISOString().split('T')[0];
         }
@@ -142,8 +159,18 @@ const App: React.FC = () => {
   };
 
   const deleteRequest = (id: string) => {
-    if (confirm('정말로 삭제하시겠습니까?')) {
+    if (confirm('정말로 이 내역을 삭제하시겠습니까?')) {
+      // Filter out the item to be deleted
       setRequests(prev => prev.filter(r => r.id !== id));
+      
+      // Clean up AI advice from memory if it exists for this item
+      if (aiAdvice[id]) {
+        setAiAdvice(prev => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
     }
   };
 
@@ -156,9 +183,9 @@ const App: React.FC = () => {
 
   const filteredRequests = requests.filter(r => {
     const matchesFilter = filterCategory === 'all' || r.category === filterCategory;
-    const matchesSearch = r.customer.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          r.product.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          r.issue.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = (r.customer || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          (r.product || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (r.issue || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesFilter && matchesSearch;
   });
 
@@ -176,21 +203,21 @@ const App: React.FC = () => {
         <nav className="flex-1 space-y-1">
           <button 
             onClick={() => setActiveTab('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 shadow-lg shadow-indigo-500/10' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
           >
             <BarChart3 className="w-5 h-5" />
             <span className="font-medium">대시보드</span>
           </button>
           <button 
             onClick={() => setActiveTab('receive')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'receive' ? 'bg-indigo-600' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'receive' ? 'bg-indigo-600 shadow-lg shadow-indigo-500/10' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
           >
             <ClipboardList className="w-5 h-5" />
             <span className="font-medium">접수 내역</span>
           </button>
           <button 
             onClick={() => setActiveTab('process')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'process' ? 'bg-indigo-600' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'process' ? 'bg-indigo-600 shadow-lg shadow-indigo-500/10' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
           >
             <Settings className="w-5 h-5" />
             <span className="font-medium">처리 현황</span>
@@ -199,8 +226,8 @@ const App: React.FC = () => {
 
         <div className="mt-auto pt-6 border-t border-slate-800">
           <button 
-            onClick={() => setShowAddForm(true)}
-            className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 py-3 rounded-xl font-semibold shadow-lg shadow-indigo-500/20 transition-all"
+            onClick={openAddModal}
+            className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 py-3 rounded-xl font-semibold shadow-lg shadow-indigo-500/20 transition-all active:scale-[0.98]"
           >
             <PlusCircle className="w-5 h-5" />
             신규 접수
@@ -260,43 +287,51 @@ const App: React.FC = () => {
                   <BarChart3 className="w-5 h-5 text-indigo-500" />
                   처리 상태 비중
                 </h3>
-                <ResponsiveContainer width="100%" height="80%">
-                  <PieChart>
-                    <Pie
-                      data={chartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={8}
-                      dataKey="value"
-                    >
-                      {chartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                    />
-                    <Legend verticalAlign="bottom" height={36} />
-                  </PieChart>
-                </ResponsiveContainer>
+                {stats.total > 0 ? (
+                  <ResponsiveContainer width="100%" height="80%">
+                    <PieChart>
+                      <Pie
+                        data={chartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={8}
+                        dataKey="value"
+                      >
+                        {chartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                      />
+                      <Legend verticalAlign="bottom" height={36} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-slate-400 italic">표시할 데이터가 없습니다.</div>
+                )}
               </div>
 
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-[400px]">
                 <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
                   <LayoutDashboard className="w-5 h-5 text-indigo-500" />
-                  월별 접수량 추이
+                  처리 통계 바형 차트
                 </h3>
-                <ResponsiveContainer width="100%" height="80%">
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8'}} />
-                    <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8'}} />
-                    <Tooltip cursor={{fill: '#f8fafc'}} />
-                    <Bar dataKey="value" fill="#6366f1" radius={[4, 4, 0, 0]} barSize={40} />
-                  </BarChart>
-                </ResponsiveContainer>
+                {stats.total > 0 ? (
+                  <ResponsiveContainer width="100%" height="80%">
+                    <BarChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8'}} />
+                      <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8'}} />
+                      <Tooltip cursor={{fill: '#f8fafc'}} />
+                      <Bar dataKey="value" fill="#6366f1" radius={[4, 4, 0, 0]} barSize={40} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-slate-400 italic">표시할 데이터가 없습니다.</div>
+                )}
               </div>
             </div>
           </div>
@@ -353,7 +388,7 @@ const App: React.FC = () => {
                         <td className="px-6 py-4">
                           <select 
                             value={item.status}
-                            onChange={(e) => updateRequest(item.id, { status: e.target.value as Status })}
+                            onChange={(e) => updateRequestStatus(item.id, { status: e.target.value as Status })}
                             className={`text-xs font-bold px-3 py-1.5 rounded-lg border focus:outline-none transition-all ${
                               item.status === Status.COMPLETED ? 'bg-emerald-50 border-emerald-200 text-emerald-600' :
                               item.status === Status.IN_PROGRESS ? 'bg-blue-50 border-blue-200 text-blue-600' :
@@ -366,9 +401,20 @@ const App: React.FC = () => {
                           </select>
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1">
                             <button 
-                              onClick={() => deleteRequest(item.id)}
+                              onClick={() => openEditModal(item)}
+                              title="수정"
+                              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteRequest(item.id);
+                              }}
+                              title="삭제"
                               className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -412,7 +458,7 @@ const App: React.FC = () => {
                                 <span className="font-bold text-slate-500">처리 구분:</span>
                                 <select 
                                   value={item.processType || ''}
-                                  onChange={(e) => updateRequest(item.id, { processType: e.target.value as ProcessType })}
+                                  onChange={(e) => updateRequestStatus(item.id, { processType: e.target.value as ProcessType })}
                                   className="bg-white border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                 >
                                   <option value="">선택</option>
@@ -424,7 +470,7 @@ const App: React.FC = () => {
                                 <input 
                                   type="text"
                                   value={item.processNote || ''}
-                                  onChange={(e) => updateRequest(item.id, { processNote: e.target.value })}
+                                  onChange={(e) => updateRequestStatus(item.id, { processNote: e.target.value })}
                                   placeholder="작업 내용을 입력하세요..."
                                   className="flex-1 bg-white border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                 />
@@ -445,8 +491,8 @@ const App: React.FC = () => {
                     <tr>
                       <td colSpan={6} className="px-6 py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center gap-3">
-                          <Search className="w-10 h-10 opacity-20" />
-                          <p>데이터가 없습니다.</p>
+                          <ClipboardList className="w-10 h-10 opacity-20" />
+                          <p>등록된 데이터가 없습니다. 우측 하단의 "신규 접수"를 눌러주세요.</p>
                         </div>
                       </td>
                     </tr>
@@ -458,28 +504,28 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Add Request Modal */}
-      {showAddForm && (
+      {/* Unified Manage Request Modal (Add/Edit) */}
+      {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
             <div className="bg-indigo-600 p-6 flex justify-between items-center text-white">
               <div className="flex items-center gap-3">
-                <PlusCircle className="w-6 h-6" />
-                <h3 className="text-xl font-bold">신규 요청 접수</h3>
+                {editingItem ? <Pencil className="w-6 h-6" /> : <PlusCircle className="w-6 h-6" />}
+                <h3 className="text-xl font-bold">{editingItem ? '요청 정보 수정' : '신규 요청 접수'}</h3>
               </div>
-              <button onClick={() => setShowAddForm(false)} className="hover:bg-indigo-500 p-2 rounded-full transition-all">
+              <button onClick={() => setIsModalOpen(false)} className="hover:bg-indigo-500 p-2 rounded-full transition-all">
                 <X className="w-6 h-6" />
               </button>
             </div>
             
-            <form onSubmit={handleAddRequest} className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <form onSubmit={handleSaveRequest} className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-1.5">
                 <label className="text-sm font-bold text-slate-600">접수 구분</label>
                 <select 
                   required
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.category}
-                  onChange={(e) => setNewRequest({...newRequest, category: e.target.value as Category})}
+                  value={formData.category}
+                  onChange={(e) => setFormData({...formData, category: e.target.value as Category})}
                 >
                   <option value={Category.REPAIR}>{Category.REPAIR}</option>
                   <option value={Category.DEVELOPMENT}>{Category.DEVELOPMENT}</option>
@@ -493,8 +539,8 @@ const App: React.FC = () => {
                   type="text" 
                   placeholder="예: 현대모비스"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.customer || ''}
-                  onChange={(e) => setNewRequest({...newRequest, customer: e.target.value})}
+                  value={formData.customer || ''}
+                  onChange={(e) => setFormData({...formData, customer: e.target.value})}
                 />
               </div>
 
@@ -505,8 +551,8 @@ const App: React.FC = () => {
                   type="text" 
                   placeholder="모델명 또는 제품명"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.product || ''}
-                  onChange={(e) => setNewRequest({...newRequest, product: e.target.value})}
+                  value={formData.product || ''}
+                  onChange={(e) => setFormData({...formData, product: e.target.value})}
                 />
               </div>
 
@@ -517,8 +563,8 @@ const App: React.FC = () => {
                   type="number" 
                   min="1"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.qty || 1}
-                  onChange={(e) => setNewRequest({...newRequest, qty: parseInt(e.target.value)})}
+                  value={formData.qty || 1}
+                  onChange={(e) => setFormData({...formData, qty: parseInt(e.target.value)})}
                 />
               </div>
 
@@ -529,8 +575,8 @@ const App: React.FC = () => {
                   rows={3}
                   placeholder="고객이 접수한 증상을 상세히 기재하세요."
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.issue || ''}
-                  onChange={(e) => setNewRequest({...newRequest, issue: e.target.value})}
+                  value={formData.issue || ''}
+                  onChange={(e) => setFormData({...formData, issue: e.target.value})}
                 />
               </div>
 
@@ -540,8 +586,8 @@ const App: React.FC = () => {
                   required
                   type="date" 
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.receiveDate || ''}
-                  onChange={(e) => setNewRequest({...newRequest, receiveDate: e.target.value})}
+                  value={formData.receiveDate || ''}
+                  onChange={(e) => setFormData({...formData, receiveDate: e.target.value})}
                 />
               </div>
 
@@ -550,8 +596,8 @@ const App: React.FC = () => {
                 <input 
                   type="date" 
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  value={newRequest.buyDate || ''}
-                  onChange={(e) => setNewRequest({...newRequest, buyDate: e.target.value})}
+                  value={formData.buyDate || ''}
+                  onChange={(e) => setFormData({...formData, buyDate: e.target.value})}
                 />
               </div>
 
@@ -560,7 +606,7 @@ const App: React.FC = () => {
                   type="submit"
                   className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-700 active:scale-[0.98] transition-all"
                 >
-                  접수 등록하기
+                  {editingItem ? '수정 완료' : '접수 등록하기'}
                 </button>
               </div>
             </form>
